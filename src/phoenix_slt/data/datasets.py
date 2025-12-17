@@ -210,15 +210,16 @@ def build_loaders(
         else None
     )
 
+    # timeout/prefetch_factor are only valid when num_workers > 0
+    effective_timeout = DATALOADER_TIMEOUT if num_workers > 0 else 0
     common_loader_kwargs = dict(
         num_workers=num_workers,
         pin_memory=True,
         persistent_workers=PERSISTENT_WORKERS and num_workers > 0,
-        timeout=DATALOADER_TIMEOUT,
+        timeout=effective_timeout,
         collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
     )
 
-    # prefetch_factor only valid when num_workers > 0
     if num_workers > 0 and PREFETCH_FACTOR is not None:
         common_loader_kwargs["prefetch_factor"] = PREFETCH_FACTOR
 

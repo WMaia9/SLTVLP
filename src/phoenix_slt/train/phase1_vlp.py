@@ -4,9 +4,11 @@ Supports both single-GPU, DataParallel, and DistributedDataParallel (torchrun).
 """
 
 import os
+from datetime import timedelta
 import torch.distributed as dist
 
 import torch
+from torch.distributed.algorithms.ddp_comm_hooks import default_hooks as ddp_hooks
 import torch.nn as nn
 import torch.optim as optim
 import wandb
@@ -22,6 +24,9 @@ from phoenix_slt.config import (
     VLP_LR,
     VLP_PATIENCE,
 )
+
+# Gradient clipping to prevent exploding gradients
+MAX_GRAD_NORM = 1.0
 from phoenix_slt.data.datasets import build_loaders, load_splits, load_tokenizer
 from phoenix_slt.models.modeling import SqueezeformerFusionEncoder, VLP_PretrainingModel
 
@@ -57,7 +62,7 @@ def main():
     if torch.cuda.is_available() and int(os.environ.get("WORLD_SIZE", "1")) > 1:
         ddp = True
         if not dist.is_initialized():
-            dist.init_process_group(backend="nccl")
+            dist.init_process_group(backend="nccl", timeout=timedelta(minutes=30))
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         torch.cuda.set_device(local_rank)
         device = torch.device(f"cuda:{local_rank}")
@@ -98,8 +103,22 @@ def main():
     vlp_model = VLP_PretrainingModel(encoder).to(device)
     if ddp:
         vlp_model = nn.parallel.DistributedDataParallel(
-            vlp_model, device_ids=[device.index], output_device=device.index
+            vlp_model,
+            device_ids=[device.index],
+            output_device=device.index,
+            broadcast_buffers=False,
+            gradient_as_bucket_view=True,
+            static_graph=True,
+            bucket_cap_mb=25,
         )
+        # Compress gradients to fp16 to reduce bandwidth and improve stability
+        try:
+            vlp_model.register_comm_hook(state=None, hook=ddp_hooks.fp16_compress_hook)
+            if rank == 0:
+                print("DDP: fp16 gradient compression hook enabled")
+        except Exception as e:
+            if rank == 0:
+                print(f"DDP: could not enable fp16 comm hook: {e}")
     elif torch.cuda.is_available() and torch.cuda.device_count() > 1:
         if rank == 0:
             print("Multiple GPUs detected — enabling DataParallel for Phase 1.")
@@ -140,9 +159,6 @@ def main():
         # Ensure proper shuffling across epochs with DistributedSampler
         if ddp and hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
-        # Optional sync to align ranks at epoch boundaries (helps avoid stragglers)
-        if ddp and dist.is_initialized():
-            dist.barrier()
         vlp_model.train()
         total_train_loss = 0.0
         pbar = tqdm(
@@ -165,7 +181,19 @@ def main():
                 logits = scale * (vis_vec @ txt_vec.t())
                 targets = torch.arange(len(logits), device=device)
                 loss = (criterion(logits, targets) + criterion(logits.t(), targets)) / 2
+            
+            # Check for NaN/Inf before backward
+            if not torch.isfinite(loss):
+                if rank == 0:
+                    print(f"WARNING: Non-finite loss detected at epoch {epoch+1}, skipping batch")
+                continue
+            
             scaler.scale(loss).backward()
+            
+            # Unscale before clipping to get true gradient magnitudes
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(vlp_model.parameters(), MAX_GRAD_NORM)
+            
             scaler.step(optimizer)
             scaler.update()
             total_train_loss += loss.item()
@@ -177,9 +205,6 @@ def main():
         # Help mitigate fragmentation across long runs
         if device.type == "cuda":
             torch.cuda.empty_cache()
-        if ddp and dist.is_initialized():
-            # Keep all ranks in lockstep between phases to prevent hangs
-            dist.barrier()
         if rank == 0:
             print(
                 f"Epoch {epoch + 1} | Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f}"
