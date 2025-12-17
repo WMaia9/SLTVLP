@@ -27,6 +27,7 @@ KPTS_FEAT_DIM = NUM_JOINTS * NUM_COORDS
 SIGLIP_DIM = 768
 SIGLIP_LEN = 180
 MAX_TOKENS = 64
+MAX_FRAMES = 180
 
 # Model hyperparameters
 ENC_LAYERS = 4
@@ -37,7 +38,7 @@ D_MODEL = 384
 MBART_DIM = 1024
 
 # Batch sizes per phase (tuned for 2x A100 40GB; adjust as needed)
-BATCH_SIZE_PHASE1 = 250
+BATCH_SIZE_PHASE1 = 500
 BATCH_SIZE_PHASE2 = 50
 
 # Phase 1 (VLP) settings
@@ -60,3 +61,10 @@ BEST_SLT_CKPT = CHECKPOINTS_DIR / "best_slt_model.pt"
 
 CPU_COUNT = os.cpu_count() or 1
 NUM_WORKERS = max(1, min(8, CPU_COUNT // 2))
+
+# DataLoader performance/safety knobs
+# Set a conservative default to avoid persistent worker edge cases on clusters.
+PERSISTENT_WORKERS = False
+PREFETCH_FACTOR = 2  # only applies when num_workers > 0
+DATALOADER_TIMEOUT = 120  # seconds; helps surface stuck worker issues
+DROP_LAST_TRAIN = False  # set True to enforce equal batch counts across ranks

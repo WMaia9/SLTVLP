@@ -71,14 +71,15 @@ PHOENIX14T/
 │   ├── train_slt.py           # CLI wrapper (Phase 2)
 │   ├── gpu_check.py
 │   └── extract_*.py           # Legacy
-├── notebooks/                 # For exploration
+├── notebook/                 # For exploration
 ├── README.md                  # Quick start
 ├── SETUP.md                   # Installation
 ├── ARCHITECTURE.md            # Design details
 ├── .gitignore
 ├── requirements.txt
-├── vlp_best_encoder.pt        # Phase 1 output
-└── best_slt_model.pt          # Phase 2 output
+├── checkpoints/
+│   ├── vlp_best_encoder.pt    # Phase 1 output
+│   └── best_slt_model.pt      # Phase 2 output
 ```
 
 ## ✅ How to Use
@@ -130,7 +131,8 @@ python scripts/train_vlp.py
 - [ ] Evaluation script on test set
 - [ ] Inference pipeline (video → predictions)
 - [ ] Hydra config instead of static config.py
-- [ ] DDP multi-GPU training
+- [x] DDP multi-GPU training for Phase 1 (torchrun + DistributedSampler)
+- [ ] DDP for Phase 2 (optional)
 - [ ] Tensorboard logging
 - [ ] Model quantization / distillation
 

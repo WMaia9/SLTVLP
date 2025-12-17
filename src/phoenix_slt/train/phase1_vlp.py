@@ -40,8 +40,8 @@ def evaluate_vlp(
             for k in ["kpts", "kpts_mask", "siglip", "labels", "labels_mask"]:
                 batch[k] = batch[k].to(device)
             vis_vec, txt_vec = model(batch)
-            # Retrieve scalar logit scale from underlying module (handles DataParallel)
-            target = model.module if isinstance(model, nn.DataParallel) else model
+            # Retrieve scalar logit scale from underlying module (handles DP/DDP)
+            target = model.module if hasattr(model, "module") else model
             scale = target.logit_scale.exp()
             logits = scale * (vis_vec @ txt_vec.t())
             targets = torch.arange(len(logits), device=device)
@@ -140,6 +140,9 @@ def main():
         # Ensure proper shuffling across epochs with DistributedSampler
         if ddp and hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
+        # Optional sync to align ranks at epoch boundaries (helps avoid stragglers)
+        if ddp and dist.is_initialized():
+            dist.barrier()
         vlp_model.train()
         total_train_loss = 0.0
         pbar = tqdm(
@@ -157,7 +160,7 @@ def main():
                 enabled=True,
             ):
                 vis_vec, txt_vec = vlp_model(batch)
-                target = vlp_model.module if isinstance(vlp_model, nn.DataParallel) else vlp_model
+                target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
                 scale = target.logit_scale.exp()
                 logits = scale * (vis_vec @ txt_vec.t())
                 targets = torch.arange(len(logits), device=device)
@@ -171,6 +174,12 @@ def main():
         avg_train = total_train_loss / len(train_loader)
         scheduler.step()
         avg_val = evaluate_vlp(vlp_model, dev_loader, criterion, device)
+        # Help mitigate fragmentation across long runs
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+        if ddp and dist.is_initialized():
+            # Keep all ranks in lockstep between phases to prevent hangs
+            dist.barrier()
         if rank == 0:
             print(
                 f"Epoch {epoch + 1} | Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f}"
@@ -187,7 +196,7 @@ def main():
         if avg_val < best_val_loss and rank == 0:
             best_val_loss = avg_val
             patience = 0
-            target = vlp_model.module if isinstance(vlp_model, nn.DataParallel) else vlp_model
+            target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
             torch.save(target.visual_encoder.state_dict(), VLP_CHECKPOINT_PATH)
             print(f"  -> Saved encoder to {VLP_CHECKPOINT_PATH}")
             wandb.summary["best_val_loss"] = best_val_loss

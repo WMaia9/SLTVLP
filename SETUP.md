@@ -23,6 +23,8 @@ venv\Scripts\activate  # Windows
 ### 3. Install Dependencies
 ```bash
 pip install -r requirements.txt
+# Optional: editable install for package imports
+pip install -e .
 ```
 
 ### 4. Verify CUDA (Optional but Recommended)
@@ -53,16 +55,26 @@ data/
 ## Quick Training
 
 ### Phase 1: Visual-Language Pre-training
+Single GPU:
 ```bash
 python scripts/train_vlp.py
 ```
-Trains encoder with contrastive learning. Saves best to `vlp_best_encoder.pt`.
+Multi-GPU (DDP), e.g., 2 GPUs:
+```bash
+torchrun --nproc_per_node=2 scripts/train_vlp.py
+```
+Trains encoder with contrastive learning. Saves best to `checkpoints/vlp_best_encoder.pt`.
 
 ### Phase 2: Sign Language Translation
+Single GPU:
 ```bash
 python scripts/train_slt.py
 ```
-Fine-tunes full model for translation. Saves best to `best_slt_model.pt`.
+Multi-GPU (DDP):
+```bash
+torchrun --nproc_per_node=2 scripts/train_slt.py
+```
+Fine-tunes full model for translation. Saves best to `checkpoints/best_slt_model.pt`.
 
 ## Configuration
 
@@ -70,7 +82,8 @@ Edit `src/phoenix_slt/config.py` to customize:
 - **Batch sizes**: `BATCH_SIZE_PHASE1`, `BATCH_SIZE_PHASE2`
 - **Learning rates**: `VLP_LR`, `ENCODER_LR`, `DECODER_LR`
 - **Model dims**: `D_MODEL`, `N_HEADS`, `ENC_LAYERS`
-- **Data paths**: `KPTS_DIR`, `SIGLIP_DIR`, etc.
+- **Data paths**: `KPTS_DIR`, `SIGLIP_DIR`, `META_DIR`, etc.
+- **Performance**: `NUM_WORKERS`, `MAX_FRAMES` (cap frames to stabilize memory)
 
 ## Weights & Biases Integration
 
@@ -83,20 +96,21 @@ export WANDB_RUN_NAME="my-experiment"
 python scripts/train_vlp.py
 ```
 
-## Troubleshooting
+## Performance & Troubleshooting
 
 | Issue | Solution |
 |-------|----------|
-| `ModuleNotFoundError: No module named 'phoenix_slt'` | Run from project root: `cd /path/to/PHOENIX14T` |
+| `ModuleNotFoundError: No module named 'phoenix_slt'` | Ensure editable install `pip install -e .` or run from project root |
 | `CUDA out of memory` | Reduce batch size in `config.py` or enable gradient accumulation |
 | `FileNotFoundError: data/annotations/...` | Check data paths in `config.py` match your setup |
 | `wandb not found` | Run `pip install wandb` |
+| Multi-GPU hangs | Use `torchrun` and ensure NCCL is available; only rank 0 writes checkpoints |
 
 ## Performance Notes
 
-- **Phase 1** (VLP): ~2-3 hours per epoch (batch=4, 4 GPU layers)
-- **Phase 2** (SLT): ~1-2 hours per epoch (batch=8, with checkpoint from Phase 1)
-- AMP (automatic mixed precision) reduces memory by ~30%
+- AMP (automatic mixed precision) reduces memory and speeds up training
+- Use `MAX_FRAMES` to cap per-sample frames if memory spikes occur
+- Set `NUM_WORKERS` according to CPU cores; keep `pin_memory=True` and `persistent_workers=True`
 
 ## Next Steps
 

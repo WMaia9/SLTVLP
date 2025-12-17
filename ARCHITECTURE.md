@@ -225,11 +225,13 @@ logits = mbart(
 
 ## Scalability Considerations
 
-- **Mixed Precision (AMP)**: Reduces memory by ~30%
-- **Gradient Accumulation**: Simulates larger batches
-- **Differential LR**: Encoder (1e-4) vs Decoder (5e-6)
-- **Early Stopping**: Prevents overfitting + saves compute
-- **Checkpointing**: Resume from any epoch
+- **Distributed Data Parallel (DDP)**: Launch via `torchrun`; uses `DistributedSampler`; rank 0 handles logging/checkpoints
+- **Mixed Precision (AMP)**: Enabled via `torch.amp`; reduces memory and speeds up training
+- **Efficient Data Loading**: `pin_memory=True`, `persistent_workers=True`, and tuned `NUM_WORKERS`
+- **Memory Safety**: `MAX_FRAMES` caps per-sample frames during collation to smooth peaks
+- **Gradient Accumulation**: Simulates larger effective batches
+- **Differential LR**: Encoder vs Decoder learning rates
+- **Early Stopping & Checkpointing**: Saves compute and best models
 
 ## Testing & Validation
 

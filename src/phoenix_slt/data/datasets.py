@@ -17,11 +17,16 @@ from phoenix_slt.config import (
     DEV_CSV,
     KPTS_DIR,
     KPTS_FEAT_DIM,
+    DATALOADER_TIMEOUT,
+    DROP_LAST_TRAIN,
     LABEL_SMOOTHING,
     MAX_TOKENS,
+    MAX_FRAMES,
     NUM_COORDS,
     NUM_JOINTS,
     NUM_WORKERS,
+    PERSISTENT_WORKERS,
+    PREFETCH_FACTOR,
     SIGLIP_DIR,
     TRAIN_CSV,
     TEST_CSV,
@@ -135,7 +140,7 @@ def phoenix_collate_fn(batch, tokenizer) -> Dict[str, Any]:
 
     kpts_list = [x["kpts"] for x in batch]
     lengths = [k.shape[0] for k in kpts_list]
-    max_len = max(lengths)
+    max_len = min(max(lengths), MAX_FRAMES)
 
     B = len(batch)
     K = kpts_list[0].shape[1]
@@ -145,8 +150,9 @@ def phoenix_collate_fn(batch, tokenizer) -> Dict[str, Any]:
 
     for i, k in enumerate(kpts_list):
         T = k.shape[0]
-        kpts_padded[i, :T, :] = k
-        kpts_mask[i, :T] = 1.0
+        T_c = min(T, max_len)
+        kpts_padded[i, :T_c, :] = k[:T_c]
+        kpts_mask[i, :T_c] = 1.0
 
     siglip_batch = torch.stack([x["siglip"] for x in batch])
 
@@ -204,35 +210,39 @@ def build_loaders(
         else None
     )
 
+    common_loader_kwargs = dict(
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=PERSISTENT_WORKERS and num_workers > 0,
+        timeout=DATALOADER_TIMEOUT,
+        collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
+    )
+
+    # prefetch_factor only valid when num_workers > 0
+    if num_workers > 0 and PREFETCH_FACTOR is not None:
+        common_loader_kwargs["prefetch_factor"] = PREFETCH_FACTOR
+
     train_loader = DataLoader(
         ds_train,
         batch_size=batch_size,
         shuffle=False if train_sampler is not None else True,
         sampler=train_sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=num_workers > 0,
-        collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
+        drop_last=DROP_LAST_TRAIN,
+        **common_loader_kwargs,
     )
     dev_loader = DataLoader(
         ds_dev,
         batch_size=batch_size,
         shuffle=False,
         sampler=dev_sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=num_workers > 0,
-        collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
+        **common_loader_kwargs,
     )
     test_loader = DataLoader(
         ds_test,
         batch_size=batch_size,
         shuffle=False,
         sampler=test_sampler,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=num_workers > 0,
-        collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
+        **common_loader_kwargs,
     )
 
     return train_loader, dev_loader, test_loader
