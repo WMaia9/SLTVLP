@@ -156,7 +156,7 @@ def phoenix_collate_fn(batch, tokenizer) -> Dict[str, Any]:
 
     siglip_batch = torch.stack([x["siglip"] for x in batch])
 
-    # Use non-deprecated API: pass labels via `text_target`
+    # mBART tokenizer returns a dict with keys: input_ids, attention_mask
     text_enc = tokenizer(
         text_target=norm_texts,
         padding=True,
@@ -167,6 +167,7 @@ def phoenix_collate_fn(batch, tokenizer) -> Dict[str, Any]:
 
     return {
         "names": names,
+        "texts": raw_texts,
         "kpts": kpts_padded,
         "kpts_mask": kpts_mask,
         "siglip": siglip_batch,

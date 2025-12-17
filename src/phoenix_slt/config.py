@@ -38,14 +38,15 @@ D_MODEL = 384
 MBART_DIM = 1024
 
 # Batch sizes per phase (tuned for 2x A100 40GB; adjust as needed)
-BATCH_SIZE_PHASE1 = 1000
+BATCH_SIZE_PHASE1 = 1500
 BATCH_SIZE_PHASE2 = 50
 
 # Phase 1 (VLP) settings
-VLP_EPOCHS = 100
+VLP_EPOCHS = 500
 VLP_LR = 1e-4
 VLP_PATIENCE = 15
 VLP_CHECKPOINT_PATH = CHECKPOINTS_DIR / "vlp_best_encoder.pt"
+VLP_FULL_CHECKPOINT_PATH = CHECKPOINTS_DIR / "vlp_best_full.pt"
 ENCODER_CKPT = VLP_CHECKPOINT_PATH
 
 # Phase 2 settings

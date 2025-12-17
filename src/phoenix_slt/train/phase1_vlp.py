@@ -20,9 +20,11 @@ from phoenix_slt.config import (
     BATCH_SIZE_PHASE1,
     D_MODEL,
     VLP_CHECKPOINT_PATH,
+    VLP_FULL_CHECKPOINT_PATH,
     VLP_EPOCHS,
     VLP_LR,
     VLP_PATIENCE,
+    ACCUMULATE_STEPS,
 )
 
 # Gradient clipping to prevent exploding gradients
@@ -175,6 +177,8 @@ def main():
             train_loader.sampler.set_epoch(epoch)
         vlp_model.train()
         total_train_loss = 0.0
+        accumulate_steps = max(1, int(ACCUMULATE_STEPS))
+        step_counter = 0
         pbar = tqdm(
             train_loader if rank == 0 else train_loader,
             desc=f"[VLP] Epoch {epoch + 1}/{VLP_EPOCHS}",
@@ -183,7 +187,8 @@ def main():
         for batch in pbar:
             for k in ["kpts", "kpts_mask", "siglip", "labels", "labels_mask"]:
                 batch[k] = batch[k].to(device)
-            optimizer.zero_grad()
+            if step_counter % accumulate_steps == 0:
+                optimizer.zero_grad()
             with autocast(
                 device_type="cuda" if amp_enabled else "cpu",
                 dtype=torch.float16 if amp_enabled else torch.bfloat16,
@@ -195,6 +200,8 @@ def main():
                 logits = scale * (vis_vec @ txt_vec.t())
                 targets = torch.arange(len(logits), device=device)
                 loss = (criterion(logits, targets) + criterion(logits.t(), targets)) / 2
+                # Scale loss for gradient accumulation
+                loss = loss / accumulate_steps
             
             # Check for NaN/Inf before backward
             if not torch.isfinite(loss):
@@ -203,15 +210,16 @@ def main():
                 continue
             
             scaler.scale(loss).backward()
-            
-            # Unscale before clipping to get true gradient magnitudes
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(vlp_model.parameters(), MAX_GRAD_NORM)
-            
-            scaler.step(optimizer)
-            scaler.update()
-            total_train_loss += loss.item()
-            pbar.set_postfix({"loss": f"{loss.item():.4f}"})
+
+            step_counter += 1
+            if step_counter % accumulate_steps == 0:
+                # Unscale and clip right before stepping to avoid multiple unscale_ calls
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(vlp_model.parameters(), MAX_GRAD_NORM)
+                scaler.step(optimizer)
+                scaler.update()
+            total_train_loss += loss.item() * accumulate_steps
+            pbar.set_postfix({"loss": f"{(loss.item() * accumulate_steps):.4f}"})
 
         avg_train = total_train_loss / len(train_loader)
         scheduler.step()
@@ -237,7 +245,9 @@ def main():
             patience = 0
             target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
             torch.save(target.visual_encoder.state_dict(), VLP_CHECKPOINT_PATH)
+            torch.save(target.state_dict(), VLP_FULL_CHECKPOINT_PATH)
             print(f"  -> Saved encoder to {VLP_CHECKPOINT_PATH}")
+            print(f"  -> Saved full VLP model to {VLP_FULL_CHECKPOINT_PATH}")
             wandb.summary["best_val_loss"] = best_val_loss
         else:
             patience += 1
