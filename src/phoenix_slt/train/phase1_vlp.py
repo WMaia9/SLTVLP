@@ -62,7 +62,8 @@ def main():
     if torch.cuda.is_available() and int(os.environ.get("WORLD_SIZE", "1")) > 1:
         ddp = True
         if not dist.is_initialized():
-            dist.init_process_group(backend="nccl", timeout=timedelta(minutes=30))
+            backend = os.environ.get("TORCH_DISTRIBUTED_BACKEND", "nccl")
+            dist.init_process_group(backend=backend, timeout=timedelta(minutes=30))
         local_rank = int(os.environ.get("LOCAL_RANK", "0"))
         torch.cuda.set_device(local_rank)
         device = torch.device(f"cuda:{local_rank}")
@@ -75,7 +76,10 @@ def main():
 
     n_gpu = torch.cuda.device_count() if torch.cuda.is_available() else 0
     if rank == 0:
-        print(f"Using device: {device} | GPUs: {n_gpu} | DDP: {ddp}")
+        ddp_backend = (
+            os.environ.get("TORCH_DISTRIBUTED_BACKEND", "nccl") if ddp else "none"
+        )
+        print(f"Using device: {device} | GPUs: {n_gpu} | DDP: {ddp} (backend={ddp_backend})")
 
     tokenizer = load_tokenizer()
     print(f"Tokenizer vocab: {len(tokenizer)} | PAD: {tokenizer.pad_token_id}")
@@ -102,23 +106,33 @@ def main():
     encoder = SqueezeformerFusionEncoder().to(device)
     vlp_model = VLP_PretrainingModel(encoder).to(device)
     if ddp:
+        ddp_backend = os.environ.get("TORCH_DISTRIBUTED_BACKEND", "nccl").lower()
+        enable_static_graph = (
+            os.environ.get("DDP_STATIC_GRAPH", "1") == "1" and ddp_backend == "nccl"
+        )
+        bucket_cap_mb = int(os.environ.get("DDP_BUCKET_CAP_MB", "25"))
+        enable_fp16_hook = (
+            os.environ.get("DDP_FP16_HOOK", "1") == "1" and ddp_backend == "nccl"
+        )
+
         vlp_model = nn.parallel.DistributedDataParallel(
             vlp_model,
             device_ids=[device.index],
             output_device=device.index,
             broadcast_buffers=False,
             gradient_as_bucket_view=True,
-            static_graph=True,
-            bucket_cap_mb=25,
+            static_graph=enable_static_graph,
+            bucket_cap_mb=bucket_cap_mb,
         )
-        # Compress gradients to fp16 to reduce bandwidth and improve stability
-        try:
-            vlp_model.register_comm_hook(state=None, hook=ddp_hooks.fp16_compress_hook)
-            if rank == 0:
-                print("DDP: fp16 gradient compression hook enabled")
-        except Exception as e:
-            if rank == 0:
-                print(f"DDP: could not enable fp16 comm hook: {e}")
+        # Compress gradients to fp16 to reduce bandwidth (NCCL only)
+        if enable_fp16_hook:
+            try:
+                vlp_model.register_comm_hook(state=None, hook=ddp_hooks.fp16_compress_hook)
+                if rank == 0:
+                    print("DDP: fp16 gradient compression hook enabled")
+            except Exception as e:
+                if rank == 0:
+                    print(f"DDP: could not enable fp16 comm hook: {e}")
     elif torch.cuda.is_available() and torch.cuda.device_count() > 1:
         if rank == 0:
             print("Multiple GPUs detected — enabling DataParallel for Phase 1.")

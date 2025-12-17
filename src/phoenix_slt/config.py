@@ -38,7 +38,7 @@ D_MODEL = 384
 MBART_DIM = 1024
 
 # Batch sizes per phase (tuned for 2x A100 40GB; adjust as needed)
-BATCH_SIZE_PHASE1 = 400
+BATCH_SIZE_PHASE1 = 1000
 BATCH_SIZE_PHASE2 = 50
 
 # Phase 1 (VLP) settings
