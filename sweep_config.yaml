@@ -1,0 +1,14 @@
+program: scripts/train_vlp.py
+method: grid
+metric:
+  name: best_val_loss
+  goal: minimize
+parameters:
+  batch_size:
+    values: [200, 400, 600, 800]
+  learning_rate:
+    values: [5e-5, 1e-4, 2e-4]
+  dropout:
+    values: [0.1, 0.2, 0.3]
+  accumulate_steps:
+    values: [1, 2, 4]
