@@ -12,7 +12,7 @@ CHECKPOINTS_DIR = ROOT_DIR / "checkpoints"
 # Data paths
 KPTS_DIR = DATA_DIR / "kpts"
 SIGLIP_DIR = DATA_DIR / "siglip_vitb16"
-META_DIR = DATA_DIR / "annotations"
+META_DIR = DATA_DIR / "annotations" 
 VIDEOS_DIR = DATA_DIR / "videos"
 TIMESFORMER_DIR = DATA_DIR / "timesformer_sliding_window"
 
@@ -23,7 +23,8 @@ TEST_CSV = META_DIR / "PHOENIX-2014-T.test.corpus.csv"
 # Data dimensions
 NUM_JOINTS = 75
 NUM_COORDS = 3
-KPTS_FEAT_DIM = NUM_JOINTS * NUM_COORDS
+# Use position + velocity features for keypoints
+KPTS_FEAT_DIM = NUM_JOINTS * NUM_COORDS * 2
 SIGLIP_DIM = 768
 SIGLIP_LEN = 180
 MAX_TOKENS = 64
@@ -60,10 +61,13 @@ DECODER_LR = 5e-6
 SLT_WEIGHT_DECAY = 0.05
 SLT_EPOCHS = 30
 LABEL_SMOOTHING = 0.1
-ACCUMULATE_STEPS = 4  # Increased from 2 for larger effective batch (better contrastive learning)
+ACCUMULATE_STEPS = 6  # Larger effective batch for stronger contrastive signal
 WARMUP_EPOCHS = 5
 PATIENCE = 8
 BEST_SLT_CKPT = CHECKPOINTS_DIR / "best_slt_model.pt"
+
+# EMA for VLP encoder
+EMA_DECAY = 0.999
 
 NUM_WORKERS = 2
 

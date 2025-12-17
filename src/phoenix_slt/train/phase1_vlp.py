@@ -4,7 +4,9 @@ Supports both single-GPU, DataParallel, and DistributedDataParallel (torchrun).
 """
 
 import os
+import copy
 from datetime import timedelta
+import math
 import torch.distributed as dist
 
 import torch
@@ -14,6 +16,7 @@ import torch.optim as optim
 import wandb
 from torch.utils.data import DataLoader
 from torch.amp import GradScaler, autocast
+from torch.optim.lr_scheduler import LinearLR, SequentialLR
 from tqdm.auto import tqdm
 
 from phoenix_slt.config import (
@@ -27,12 +30,38 @@ from phoenix_slt.config import (
     ACCUMULATE_STEPS,
     USE_KPTS,
     USE_SIGLIP,
+    WARMUP_EPOCHS,
+    LABEL_SMOOTHING,
+    EMA_DECAY,
 )
 
 # Gradient clipping to prevent exploding gradients
 MAX_GRAD_NORM = 1.0
 from phoenix_slt.data.datasets import build_loaders, load_splits, load_tokenizer
 from phoenix_slt.models.modeling import SqueezeformerFusionEncoder, VLP_PretrainingModel
+
+
+class EMA:
+    """Exponential Moving Average of model parameters."""
+
+    def __init__(self, model: nn.Module, decay: float = 0.999):
+        self.decay = decay
+        self.shadow = {name: p.detach().clone() for name, p in model.state_dict().items() if p.dtype.is_floating_point}
+
+    @torch.no_grad()
+    def update(self, model: nn.Module):
+        for name, param in model.state_dict().items():
+            if name in self.shadow and param.dtype.is_floating_point:
+                self.shadow[name].mul_(self.decay).add_(param, alpha=1.0 - self.decay)
+
+    def clone_model(self, model: nn.Module) -> nn.Module:
+        ema_model = copy.deepcopy(model)
+        state = ema_model.state_dict()
+        for name, value in self.shadow.items():
+            if name in state:
+                state[name].copy_(value)
+        ema_model.load_state_dict(state, strict=True)
+        return ema_model
 
 
 def evaluate_vlp(
@@ -50,8 +79,8 @@ def evaluate_vlp(
                 batch[k] = batch[k].to(device)
             vis_vec, txt_vec = model(batch)
             # Retrieve scalar logit scale from underlying module (handles DP/DDP)
-            target = model.module if hasattr(model, "module") else model
-            scale = target.logit_scale.exp()
+                target = model.module if hasattr(model, "module") else model
+                scale = target.logit_scale.clamp(min=math.log(1 / 1000), max=math.log(100)).exp()
             logits = scale * (vis_vec @ txt_vec.t())
             targets = torch.arange(len(logits), device=device)
             loss = (criterion(logits, targets) + criterion(logits.t(), targets)) / 2
@@ -143,10 +172,20 @@ def main():
         vlp_model = nn.DataParallel(vlp_model)
 
     optimizer = optim.AdamW(vlp_model.parameters(), lr=VLP_LR, weight_decay=0.001)
-    scheduler = optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=VLP_EPOCHS, eta_min=1e-6
-    )
-    criterion = nn.CrossEntropyLoss()
+    # Warmup + cosine schedule (epoch-wise)
+    warmup_epochs = max(0, min(WARMUP_EPOCHS, VLP_EPOCHS - 1))
+    schedulers = []
+    milestones = []
+    if warmup_epochs > 0:
+        schedulers.append(LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs))
+        milestones.append(warmup_epochs)
+    cosine_epochs = max(1, VLP_EPOCHS - warmup_epochs)
+    schedulers.append(optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_epochs, eta_min=1e-6))
+    scheduler = SequentialLR(optimizer, schedulers, milestones=milestones) if milestones else schedulers[0]
+    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
+    # EMA tracker (on the non-wrapped model)
+    ema_model_ref = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
+    ema = EMA(ema_model_ref, decay=EMA_DECAY)
     amp_enabled = device.type == "cuda"
     scaler = GradScaler("cuda" if amp_enabled else "cpu", enabled=amp_enabled)
 
@@ -166,6 +205,8 @@ def main():
                 "world_size": world_size,
                 "use_kpts": USE_KPTS,
                 "use_siglip": USE_SIGLIP,
+                "warmup_epochs": warmup_epochs,
+                "label_smoothing": LABEL_SMOOTHING,
             },
         )
 
@@ -200,7 +241,7 @@ def main():
             ):
                 vis_vec, txt_vec = vlp_model(batch)
                 target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
-                scale = target.logit_scale.exp()
+                scale = target.logit_scale.clamp(min=math.log(1 / 1000), max=math.log(100)).exp()
                 logits = scale * (vis_vec @ txt_vec.t())
                 targets = torch.arange(len(logits), device=device)
                 loss = (criterion(logits, targets) + criterion(logits.t(), targets)) / 2
@@ -222,12 +263,17 @@ def main():
                 torch.nn.utils.clip_grad_norm_(vlp_model.parameters(), MAX_GRAD_NORM)
                 scaler.step(optimizer)
                 scaler.update()
+                # EMA update on the base model
+                ema.update(ema_model_ref)
             total_train_loss += loss.item() * accumulate_steps
             pbar.set_postfix({"loss": f"{(loss.item() * accumulate_steps):.4f}"})
 
         avg_train = total_train_loss / len(train_loader)
         scheduler.step()
-        avg_val = evaluate_vlp(vlp_model, dev_loader, criterion, device)
+        # Evaluate with EMA-smoothed weights for stability
+        with torch.no_grad():
+            ema_eval_model = ema.clone_model(ema_model_ref)
+            avg_val = evaluate_vlp(ema_eval_model, dev_loader, criterion, device)
         # Help mitigate fragmentation across long runs
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -247,7 +293,7 @@ def main():
         if avg_val < best_val_loss and rank == 0:
             best_val_loss = avg_val
             patience = 0
-            target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
+            target = ema_eval_model if "ema_eval_model" in locals() else (vlp_model.module if hasattr(vlp_model, "module") else vlp_model)
             torch.save(target.visual_encoder.state_dict(), VLP_CHECKPOINT_PATH)
             torch.save(target.state_dict(), VLP_FULL_CHECKPOINT_PATH)
             print(f"  -> Saved encoder to {VLP_CHECKPOINT_PATH}")
