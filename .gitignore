@@ -53,10 +53,14 @@ env/
 Thumbs.db
 
 # Project-specific
-data/kpts/
-data/siglip_vitb16/
-data/videos/
-data/timesformer_sliding_window/
+data/
+checkpoints/
+
+# Large artifacts
+*.pt
+*.pth
+*.npy
+*.npz
 
 # Logs
 *.log
