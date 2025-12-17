@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "phoenix-slt"
+version = "0.1.0"
+description = "Two-phase Sign Language Translation (VLP + SLT)"
+readme = "README.md"
+authors = [{ name = "Wesley Ferreira Maia" }]
+requires-python = ">=3.10"
+keywords = ["sign-language", "translation", "pytorch", "transformers"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
