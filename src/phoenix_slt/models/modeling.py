@@ -305,11 +305,10 @@ class VLP_PretrainingModel(nn.Module):
         txt_vec = F.normalize(txt_vec, dim=-1)
         return txt_vec
 
-    def forward(self, batch) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, batch) -> Tuple[torch.Tensor, torch.Tensor]:
         vis_vec = self.encode_visual(batch)
         txt_vec = self.encode_text(batch)
-        scale = self.logit_scale.exp()
-        return vis_vec, txt_vec, scale
+        return vis_vec, txt_vec
 
 
 class SignTranslationModel(nn.Module):

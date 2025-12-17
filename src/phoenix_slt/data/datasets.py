@@ -9,6 +9,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
+from torch.utils.data.distributed import DistributedSampler
 from transformers import MBartTokenizer
 
 from phoenix_slt.config import (
@@ -175,29 +176,62 @@ def build_loaders(
     tokenizer,
     batch_size: int,
     num_workers: int = NUM_WORKERS,
+    distributed: bool = False,
+    rank: int = 0,
+    world_size: int = 1,
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
-    """Create train/dev/test DataLoaders with shared collate_fn."""
+    """Create train/dev/test DataLoaders with shared collate_fn.
+
+    If ``distributed`` is True, use DistributedSampler for deterministic sharding.
+    """
+    ds_train = PhoenixDataset(df_train, "train", is_train=True)
+    ds_dev = PhoenixDataset(df_dev, "dev", is_train=False)
+    ds_test = PhoenixDataset(df_test, "test", is_train=False)
+
+    train_sampler = (
+        DistributedSampler(ds_train, num_replicas=world_size, rank=rank, shuffle=True)
+        if distributed
+        else None
+    )
+    dev_sampler = (
+        DistributedSampler(ds_dev, num_replicas=world_size, rank=rank, shuffle=False)
+        if distributed
+        else None
+    )
+    test_sampler = (
+        DistributedSampler(ds_test, num_replicas=world_size, rank=rank, shuffle=False)
+        if distributed
+        else None
+    )
+
     train_loader = DataLoader(
-        PhoenixDataset(df_train, "train", is_train=True),
+        ds_train,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=False if train_sampler is not None else True,
+        sampler=train_sampler,
         num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
         collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
     )
-
     dev_loader = DataLoader(
-        PhoenixDataset(df_dev, "dev", is_train=False),
+        ds_dev,
         batch_size=batch_size,
         shuffle=False,
+        sampler=dev_sampler,
         num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
         collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
     )
-
     test_loader = DataLoader(
-        PhoenixDataset(df_test, "test", is_train=False),
+        ds_test,
         batch_size=batch_size,
         shuffle=False,
+        sampler=test_sampler,
         num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=num_workers > 0,
         collate_fn=lambda b: phoenix_collate_fn(b, tokenizer),
     )
 

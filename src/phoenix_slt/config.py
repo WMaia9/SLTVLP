@@ -1,5 +1,6 @@
 """Project-wide configuration constants (paths and hyperparameters)."""
 
+import os
 from pathlib import Path
 
 # Project roots
@@ -35,9 +36,9 @@ DROPOUT = 0.4
 D_MODEL = 384
 MBART_DIM = 1024
 
-# Batch sizes per phase (tuned for A100 40GB; adjust as needed)
-BATCH_SIZE_PHASE1 = 16
-BATCH_SIZE_PHASE2 = 16
+# Batch sizes per phase (tuned for 2x A100 40GB; adjust as needed)
+BATCH_SIZE_PHASE1 = 250
+BATCH_SIZE_PHASE2 = 50
 
 # Phase 1 (VLP) settings
 VLP_EPOCHS = 100
@@ -57,4 +58,5 @@ WARMUP_EPOCHS = 5
 PATIENCE = 8
 BEST_SLT_CKPT = CHECKPOINTS_DIR / "best_slt_model.pt"
 
-NUM_WORKERS = 0
+CPU_COUNT = os.cpu_count() or 1
+NUM_WORKERS = max(1, min(8, CPU_COUNT // 2))
