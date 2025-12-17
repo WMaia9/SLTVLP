@@ -33,9 +33,14 @@ MAX_FRAMES = 180
 ENC_LAYERS = 4
 N_HEADS = 4
 FF_EXPANSION = 4
-DROPOUT = 0.4
+DROPOUT = 0.2  # Reduced from 0.4 to improve representation learning
 D_MODEL = 384
 MBART_DIM = 1024
+
+# Modality switches
+USE_KPTS = True
+USE_SIGLIP = True  # ENABLED: Using both modalities for better performance
+assert USE_KPTS or USE_SIGLIP, "At least one modality must be True."
 
 # Batch sizes per phase (tuned for 2x A100 40GB; adjust as needed)
 BATCH_SIZE_PHASE1 = 1500
@@ -55,7 +60,7 @@ DECODER_LR = 5e-6
 SLT_WEIGHT_DECAY = 0.05
 SLT_EPOCHS = 30
 LABEL_SMOOTHING = 0.1
-ACCUMULATE_STEPS = 2
+ACCUMULATE_STEPS = 4  # Increased from 2 for larger effective batch (better contrastive learning)
 WARMUP_EPOCHS = 5
 PATIENCE = 8
 BEST_SLT_CKPT = CHECKPOINTS_DIR / "best_slt_model.pt"

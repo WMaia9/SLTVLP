@@ -8,7 +8,17 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers import MBartForConditionalGeneration
 
-from phoenix_slt.config import D_MODEL, ENCODER_LR, FF_EXPANSION, KPTS_FEAT_DIM, MBART_DIM, N_HEADS, SIGLIP_DIM
+from phoenix_slt.config import (
+    D_MODEL,
+    ENCODER_LR,
+    FF_EXPANSION,
+    KPTS_FEAT_DIM,
+    MBART_DIM,
+    N_HEADS,
+    SIGLIP_DIM,
+    USE_KPTS,
+    USE_SIGLIP,
+)
 
 
 class LayerNorm(nn.Module):
@@ -247,13 +257,13 @@ class SqueezeformerFusionEncoder(nn.Module):
         kpts_mask: torch.Tensor,
         siglip: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        x_k = self.kpts_proj(kpts)
-        x_v = self.vlm_proj(siglip)
-        x_v = self.temporal_vlm(x_v)
-
-        x_v = x_v.transpose(1, 2)
-        x_v = F.interpolate(x_v, size=x_k.shape[1], mode="linear", align_corners=False)
-        x_v = x_v.transpose(1, 2)
+        x_k = self.kpts_proj(kpts) if USE_KPTS else torch.zeros_like(self.kpts_proj(kpts))
+        x_v = self.vlm_proj(siglip) if USE_SIGLIP else torch.zeros_like(self.vlm_proj(siglip))
+        if USE_SIGLIP:
+            x_v = self.temporal_vlm(x_v)
+            x_v = x_v.transpose(1, 2)
+            x_v = F.interpolate(x_v, size=x_k.shape[1], mode="linear", align_corners=False)
+            x_v = x_v.transpose(1, 2)
 
         x = self.fusion(x_k, x_v)
         x = self.pos_enc(x)

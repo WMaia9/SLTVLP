@@ -25,6 +25,8 @@ from phoenix_slt.config import (
     VLP_LR,
     VLP_PATIENCE,
     ACCUMULATE_STEPS,
+    USE_KPTS,
+    USE_SIGLIP,
 )
 
 # Gradient clipping to prevent exploding gradients
@@ -162,6 +164,8 @@ def main():
                 "d_model": D_MODEL,
                 "ddp": ddp,
                 "world_size": world_size,
+                "use_kpts": USE_KPTS,
+                "use_siglip": USE_SIGLIP,
             },
         )
 
