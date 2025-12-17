@@ -1,6 +1,8 @@
+"""Dataset and dataloader utilities for PHOENIX-2014-T SLT."""
+
 import random
 import unicodedata
-from typing import Tuple
+from typing import Any, Dict, Tuple
 
 import numpy as np
 import pandas as pd
@@ -26,13 +28,17 @@ from phoenix_slt.config import (
 
 
 def load_tokenizer() -> MBartTokenizer:
+    """Load mBART tokenizer configured for German."""
     tokenizer = MBartTokenizer.from_pretrained(
         "facebook/mbart-large-cc25", src_lang="de_DE", tgt_lang="de_DE"
     )
     return tokenizer
 
 
-def load_splits(train_csv=TRAIN_CSV, dev_csv=DEV_CSV, test_csv=TEST_CSV):
+def load_splits(
+    train_csv=TRAIN_CSV, dev_csv=DEV_CSV, test_csv=TEST_CSV
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Load train/dev/test CSV splits with standardized columns."""
     video_col = "name"
     text_col = "translation"
 
@@ -48,7 +54,7 @@ def load_splits(train_csv=TRAIN_CSV, dev_csv=DEV_CSV, test_csv=TEST_CSV):
 
 
 def augment_kpts_tensor(kpts: torch.Tensor) -> torch.Tensor:
-    # Geometric augmentations: temporal resample, scale/translate, and jitter.
+    """Apply temporal and geometric jitter for data augmentation."""
     T, D = kpts.shape
     kpts = kpts.view(T, NUM_JOINTS, NUM_COORDS)
 
@@ -74,6 +80,7 @@ def augment_kpts_tensor(kpts: torch.Tensor) -> torch.Tensor:
 
 
 class PhoenixDataset(Dataset):
+    """PyTorch Dataset for PHOENIX-2014-T keypoints + SigLIP features."""
     def __init__(self, df, split: str, kpts_dir=KPTS_DIR, siglip_dir=SIGLIP_DIR, is_train: bool = False):
         self.df = df.reset_index(drop=True)
         self.split = split
@@ -113,12 +120,14 @@ class PhoenixDataset(Dataset):
 
 
 def normalize_german(text: str) -> str:
+    """Normalize German text (trim, NFC, lowercase)."""
     text = text.strip()
     text = unicodedata.normalize("NFC", text)
     return text.lower()
 
 
-def phoenix_collate_fn(batch, tokenizer):
+def phoenix_collate_fn(batch, tokenizer) -> Dict[str, Any]:
+    """Pad sequences and tokenize batch for model consumption."""
     names = [x["name"] for x in batch]
     raw_texts = [x["text"] for x in batch]
     norm_texts = [normalize_german(t) for t in raw_texts]
@@ -159,7 +168,15 @@ def phoenix_collate_fn(batch, tokenizer):
     }
 
 
-def build_loaders(df_train, df_dev, df_test, tokenizer, batch_size: int, num_workers: int = NUM_WORKERS):
+def build_loaders(
+    df_train,
+    df_dev,
+    df_test,
+    tokenizer,
+    batch_size: int,
+    num_workers: int = NUM_WORKERS,
+) -> Tuple[DataLoader, DataLoader, DataLoader]:
+    """Create train/dev/test DataLoaders with shared collate_fn."""
     train_loader = DataLoader(
         PhoenixDataset(df_train, "train", is_train=True),
         batch_size=batch_size,

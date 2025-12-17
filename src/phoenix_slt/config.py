@@ -1,3 +1,5 @@
+"""Project-wide configuration constants (paths and hyperparameters)."""
+
 from pathlib import Path
 
 # Project roots

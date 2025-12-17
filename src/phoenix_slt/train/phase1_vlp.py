@@ -1,8 +1,12 @@
+"""Phase 1: Visual-language pretraining loop (contrastive alignment)."""
+
 import os
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from phoenix_slt.config import (
@@ -17,7 +21,13 @@ from phoenix_slt.data.datasets import build_loaders, load_splits, load_tokenizer
 from phoenix_slt.models.modeling import SqueezeformerFusionEncoder, VLP_PretrainingModel
 
 
-def evaluate_vlp(model, loader, criterion, device):
+def evaluate_vlp(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> float:
+    """Compute average validation loss for VLP contrastive alignment."""
     model.eval()
     total_val_loss = 0.0
     with torch.no_grad():
@@ -33,6 +43,7 @@ def evaluate_vlp(model, loader, criterion, device):
 
 
 def main():
+    """Run Phase 1 visual-language pretraining and save the best encoder."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
 
@@ -47,9 +58,7 @@ def main():
     train_loader, dev_loader, _ = build_loaders(
         df_train, df_dev, df_test, tokenizer, batch_size=BATCH_SIZE_PHASE1
     )
-    print(
-        f"Batches -> train: {len(train_loader)}, dev: {len(dev_loader)}"
-    )
+    print(f"Batches -> train: {len(train_loader)}, dev: {len(dev_loader)}")
 
     encoder = SqueezeformerFusionEncoder().to(device)
     vlp_model = VLP_PretrainingModel(encoder).to(device)
@@ -80,7 +89,11 @@ def main():
     for epoch in range(VLP_EPOCHS):
         vlp_model.train()
         total_train_loss = 0.0
-        pbar = tqdm(train_loader, desc=f"[VLP] Epoch {epoch + 1}/{VLP_EPOCHS}", leave=False)
+        pbar = tqdm(
+            train_loader,
+            desc=f"[VLP] Epoch {epoch + 1}/{VLP_EPOCHS}",
+            leave=False,
+        )
         for batch in pbar:
             for k in ["kpts", "kpts_mask", "siglip", "labels", "labels_mask"]:
                 batch[k] = batch[k].to(device)
@@ -101,12 +114,14 @@ def main():
             f"Epoch {epoch + 1} | Train Loss: {avg_train:.4f} | Val Loss: {avg_val:.4f}"
         )
 
-        wandb.log({
-            "epoch": epoch + 1,
-            "train_loss": avg_train,
-            "val_loss": avg_val,
-            "lr": scheduler.get_last_lr()[0],
-        })
+        wandb.log(
+            {
+                "epoch": epoch + 1,
+                "train_loss": avg_train,
+                "val_loss": avg_val,
+                "lr": scheduler.get_last_lr()[0],
+            }
+        )
 
         if avg_val < best_val_loss:
             best_val_loss = avg_val

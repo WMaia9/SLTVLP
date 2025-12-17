@@ -1,12 +1,17 @@
+"""Phase 2: Sign language translation fine-tuning loop (BLEU-optimized)."""
+
 import gc
 import math
 import os
+from typing import List, Tuple
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
 from sacrebleu.metrics import BLEU
 from torch.amp import GradScaler, autocast
+from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
 from phoenix_slt.config import (
@@ -26,7 +31,10 @@ from phoenix_slt.data.datasets import build_loaders, load_splits, load_tokenizer
 from phoenix_slt.models.modeling import SignTranslationModel, SqueezeformerFusionEncoder
 
 
-def build_param_groups(model, enc_lr: float, dec_lr: float, weight_decay: float):
+def build_param_groups(
+    model: nn.Module, enc_lr: float, dec_lr: float, weight_decay: float
+):
+    """Create encoder/decoder param groups with differential LRs and decay."""
     enc_decay, enc_no_decay = [], []
     dec_decay, dec_no_decay = [], []
     for name, param in model.named_parameters():
@@ -51,10 +59,15 @@ def build_param_groups(model, enc_lr: float, dec_lr: float, weight_decay: float)
     ]
 
 
-def generate_from_batch(model, batch, tokenizer, device):
+def generate_from_batch(
+    model: nn.Module, batch, tokenizer, device: torch.device
+) -> torch.Tensor:
+    """Greedily decode translations from a single batch using mBART generate."""
     model.eval()
     with torch.no_grad():
-        enc_out, _ = model.encoder(batch["kpts"], batch["kpts_mask"], batch["siglip"])
+        enc_out, _ = model.encoder(
+            batch["kpts"], batch["kpts_mask"], batch["siglip"]
+        )
         enc_out = model.adapter(enc_out)
         generated_ids = model.mbart.generate(
             inputs_embeds=enc_out,
@@ -70,7 +83,14 @@ def generate_from_batch(model, batch, tokenizer, device):
     return generated_ids
 
 
-def compute_bleu(model, loader, tokenizer, device, max_batches: int = 30):
+def compute_bleu(
+    model: nn.Module,
+    loader: DataLoader,
+    tokenizer,
+    device: torch.device,
+    max_batches: int = 30,
+) -> float:
+    """Estimate BLEU on a subset of the dev loader for quick feedback."""
     bleu_metric = BLEU(effective_order=True)
     preds, refs = [], []
     with torch.no_grad():
@@ -85,7 +105,16 @@ def compute_bleu(model, loader, tokenizer, device, max_batches: int = 30):
     return bleu_metric.corpus_score(preds, [refs]).score
 
 
-def train_one_epoch(model, loader, optimizer, scaler, accumulate_steps, criterion, device):
+def train_one_epoch(
+    model: nn.Module,
+    loader: DataLoader,
+    optimizer: optim.Optimizer,
+    scaler: GradScaler,
+    accumulate_steps: int,
+    criterion: nn.Module,
+    device: torch.device,
+) -> float:
+    """Train SLT for one epoch with AMP and gradient accumulation."""
     model.train()
     total_loss = 0.0
     optimizer.zero_grad(set_to_none=True)
@@ -93,9 +122,15 @@ def train_one_epoch(model, loader, optimizer, scaler, accumulate_steps, criterio
     for step, batch in enumerate(pbar):
         for k in ["kpts", "kpts_mask", "siglip", "labels"]:
             batch[k] = batch[k].to(device)
-        with autocast(device_type="cuda" if device.type == "cuda" else "cpu", dtype=torch.float16):
+        with autocast(
+            device_type="cuda" if device.type == "cuda" else "cpu",
+            dtype=torch.float16,
+        ):
             _, logits = model(batch)
-            loss = criterion(logits.view(-1, logits.shape[-1]), batch["labels"].view(-1))
+            loss = criterion(
+                logits.view(-1, logits.shape[-1]),
+                batch["labels"].view(-1),
+            )
             loss = loss / accumulate_steps
         scaler.scale(loss).backward()
         if (step + 1) % accumulate_steps == 0:
@@ -109,21 +144,40 @@ def train_one_epoch(model, loader, optimizer, scaler, accumulate_steps, criterio
     return total_loss / len(loader)
 
 
-def evaluate_loss(model, loader, criterion, device):
+def evaluate_loss(
+    model: nn.Module,
+    loader: DataLoader,
+    criterion: nn.Module,
+    device: torch.device,
+) -> float:
+    """Compute average cross-entropy loss on the dev set."""
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
         for batch in tqdm(loader, desc="Eval", leave=False):
             for k in ["kpts", "kpts_mask", "siglip", "labels"]:
                 batch[k] = batch[k].to(device)
-            with autocast(device_type="cuda" if device.type == "cuda" else "cpu", dtype=torch.float16):
+            with autocast(
+                device_type="cuda" if device.type == "cuda" else "cpu",
+                dtype=torch.float16,
+            ):
                 _, logits = model(batch)
-                loss = criterion(logits.view(-1, logits.shape[-1]), batch["labels"].view(-1))
+                loss = criterion(
+                    logits.view(-1, logits.shape[-1]),
+                    batch["labels"].view(-1),
+                )
             total_loss += loss.item()
     return total_loss / len(loader)
 
 
-def show_dev_examples(model, loader, tokenizer, device, max_examples: int = 5):
+def show_dev_examples(
+    model: nn.Module,
+    loader: DataLoader,
+    tokenizer,
+    device: torch.device,
+    max_examples: int = 5,
+):
+    """Print a few dev-set predictions vs references for qualitative check."""
     model.eval()
     print("\n--- Generating Examples (Dev Set) ---")
     batch = next(iter(loader))
@@ -140,6 +194,7 @@ def show_dev_examples(model, loader, tokenizer, device, max_examples: int = 5):
 
 
 def main():
+    """Run Phase 2 SLT fine-tuning, logging metrics and saving best BLEU model."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     gc.collect()
