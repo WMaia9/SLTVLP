@@ -149,14 +149,14 @@ def phoenix_collate_fn(batch, tokenizer) -> Dict[str, Any]:
 
     siglip_batch = torch.stack([x["siglip"] for x in batch])
 
-    with tokenizer.as_target_tokenizer():
-        text_enc = tokenizer(
-            norm_texts,
-            padding=True,
-            truncation=True,
-            max_length=MAX_TOKENS,
-            return_tensors="pt",
-        )
+    # Use non-deprecated API: pass labels via `text_target`
+    text_enc = tokenizer(
+        text_target=norm_texts,
+        padding=True,
+        truncation=True,
+        max_length=MAX_TOKENS,
+        return_tensors="pt",
+    )
 
     return {
         "names": names,

@@ -1,51 +1,7 @@
-from pathlib import Path
+"""Deprecated module.
 
-# Paths
-ROOT_DIR = Path(__file__).resolve().parent.parent
-KPTS_DIR = ROOT_DIR / "kpts"
-SIGLIP_DIR = ROOT_DIR / "siglip_vitb16"
-META_DIR = ROOT_DIR / "annotations"
+This file exists only for backward compatibility.
+Please import configuration from `phoenix_slt.config`.
+"""
 
-TRAIN_CSV = META_DIR / "PHOENIX-2014-T.train.corpus.csv"
-DEV_CSV = META_DIR / "PHOENIX-2014-T.dev.corpus.csv"
-TEST_CSV = META_DIR / "PHOENIX-2014-T.test.corpus.csv"
-
-# Data dimensions
-NUM_JOINTS = 75
-NUM_COORDS = 3
-KPTS_FEAT_DIM = NUM_JOINTS * NUM_COORDS
-SIGLIP_DIM = 768
-SIGLIP_LEN = 180
-MAX_TOKENS = 64
-
-# Model hyperparameters
-ENC_LAYERS = 4
-N_HEADS = 4
-FF_EXPANSION = 4
-DROPOUT = 0.4
-D_MODEL = 384
-MBART_DIM = 1024
-
-# Batch sizes per phase
-BATCH_SIZE_PHASE1 = 4
-BATCH_SIZE_PHASE2 = 8
-
-# Phase 1 (VLP) settings
-VLP_EPOCHS = 100
-VLP_LR = 1e-4
-VLP_PATIENCE = 15
-VLP_CHECKPOINT_PATH = ROOT_DIR / "vlp_best_encoder.pt"
-ENCODER_CKPT = VLP_CHECKPOINT_PATH
-
-# Phase 2 settings
-ENCODER_LR = 1e-4
-DECODER_LR = 5e-6
-SLT_WEIGHT_DECAY = 0.05
-SLT_EPOCHS = 30
-LABEL_SMOOTHING = 0.1
-ACCUMULATE_STEPS = 2
-WARMUP_EPOCHS = 5
-PATIENCE = 8
-BEST_SLT_CKPT = ROOT_DIR / "best_slt_model.pt"
-
-NUM_WORKERS = 0
+from phoenix_slt.config import *  # noqa: F401,F403

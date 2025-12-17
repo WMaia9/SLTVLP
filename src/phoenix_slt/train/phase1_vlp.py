@@ -45,7 +45,8 @@ def evaluate_vlp(
 def main():
     """Run Phase 1 visual-language pretraining and save the best encoder."""
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    n_gpu = torch.cuda.device_count() if torch.cuda.is_available() else 0
+    print(f"Using device: {device} | GPUs: {n_gpu}")
 
     tokenizer = load_tokenizer()
     print(f"Tokenizer vocab: {len(tokenizer)} | PAD: {tokenizer.pad_token_id}")
@@ -62,6 +63,9 @@ def main():
 
     encoder = SqueezeformerFusionEncoder().to(device)
     vlp_model = VLP_PretrainingModel(encoder).to(device)
+    if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+        print("Multiple GPUs detected — enabling DataParallel for Phase 1.")
+        vlp_model = nn.DataParallel(vlp_model)
 
     optimizer = optim.AdamW(vlp_model.parameters(), lr=VLP_LR, weight_decay=0.001)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(
@@ -126,7 +130,8 @@ def main():
         if avg_val < best_val_loss:
             best_val_loss = avg_val
             patience = 0
-            torch.save(vlp_model.visual_encoder.state_dict(), VLP_CHECKPOINT_PATH)
+            target = vlp_model.module if isinstance(vlp_model, nn.DataParallel) else vlp_model
+            torch.save(target.visual_encoder.state_dict(), VLP_CHECKPOINT_PATH)
             print(f"  -> Saved encoder to {VLP_CHECKPOINT_PATH}")
             wandb.summary["best_val_loss"] = best_val_loss
         else:
