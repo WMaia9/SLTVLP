@@ -79,8 +79,8 @@ def evaluate_vlp(
                 batch[k] = batch[k].to(device)
             vis_vec, txt_vec = model(batch)
             # Retrieve scalar logit scale from underlying module (handles DP/DDP)
-                target = model.module if hasattr(model, "module") else model
-                scale = target.logit_scale.clamp(min=math.log(1 / 1000), max=math.log(100)).exp()
+            target = model.module if hasattr(model, "module") else model
+            scale = target.logit_scale.exp()
             logits = scale * (vis_vec @ txt_vec.t())
             targets = torch.arange(len(logits), device=device)
             loss = (criterion(logits, targets) + criterion(logits.t(), targets)) / 2
@@ -172,20 +172,10 @@ def main():
         vlp_model = nn.DataParallel(vlp_model)
 
     optimizer = optim.AdamW(vlp_model.parameters(), lr=VLP_LR, weight_decay=0.001)
-    # Warmup + cosine schedule (epoch-wise)
-    warmup_epochs = max(0, min(WARMUP_EPOCHS, VLP_EPOCHS - 1))
-    schedulers = []
-    milestones = []
-    if warmup_epochs > 0:
-        schedulers.append(LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs))
-        milestones.append(warmup_epochs)
-    cosine_epochs = max(1, VLP_EPOCHS - warmup_epochs)
-    schedulers.append(optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cosine_epochs, eta_min=1e-6))
-    scheduler = SequentialLR(optimizer, schedulers, milestones=milestones) if milestones else schedulers[0]
-    criterion = nn.CrossEntropyLoss(label_smoothing=LABEL_SMOOTHING)
-    # EMA tracker (on the non-wrapped model)
-    ema_model_ref = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
-    ema = EMA(ema_model_ref, decay=EMA_DECAY)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=VLP_EPOCHS, eta_min=1e-6
+    )
+    criterion = nn.CrossEntropyLoss()
     amp_enabled = device.type == "cuda"
     scaler = GradScaler("cuda" if amp_enabled else "cpu", enabled=amp_enabled)
 
@@ -205,8 +195,6 @@ def main():
                 "world_size": world_size,
                 "use_kpts": USE_KPTS,
                 "use_siglip": USE_SIGLIP,
-                "warmup_epochs": warmup_epochs,
-                "label_smoothing": LABEL_SMOOTHING,
             },
         )
 
@@ -241,7 +229,7 @@ def main():
             ):
                 vis_vec, txt_vec = vlp_model(batch)
                 target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
-                scale = target.logit_scale.clamp(min=math.log(1 / 1000), max=math.log(100)).exp()
+                scale = target.logit_scale.exp()
                 logits = scale * (vis_vec @ txt_vec.t())
                 targets = torch.arange(len(logits), device=device)
                 loss = (criterion(logits, targets) + criterion(logits.t(), targets)) / 2
@@ -263,17 +251,12 @@ def main():
                 torch.nn.utils.clip_grad_norm_(vlp_model.parameters(), MAX_GRAD_NORM)
                 scaler.step(optimizer)
                 scaler.update()
-                # EMA update on the base model
-                ema.update(ema_model_ref)
             total_train_loss += loss.item() * accumulate_steps
             pbar.set_postfix({"loss": f"{(loss.item() * accumulate_steps):.4f}"})
 
         avg_train = total_train_loss / len(train_loader)
         scheduler.step()
-        # Evaluate with EMA-smoothed weights for stability
-        with torch.no_grad():
-            ema_eval_model = ema.clone_model(ema_model_ref)
-            avg_val = evaluate_vlp(ema_eval_model, dev_loader, criterion, device)
+        avg_val = evaluate_vlp(vlp_model, dev_loader, criterion, device)
         # Help mitigate fragmentation across long runs
         if device.type == "cuda":
             torch.cuda.empty_cache()
@@ -293,7 +276,7 @@ def main():
         if avg_val < best_val_loss and rank == 0:
             best_val_loss = avg_val
             patience = 0
-            target = ema_eval_model if "ema_eval_model" in locals() else (vlp_model.module if hasattr(vlp_model, "module") else vlp_model)
+            target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
             torch.save(target.visual_encoder.state_dict(), VLP_CHECKPOINT_PATH)
             torch.save(target.state_dict(), VLP_FULL_CHECKPOINT_PATH)
             print(f"  -> Saved encoder to {VLP_CHECKPOINT_PATH}")

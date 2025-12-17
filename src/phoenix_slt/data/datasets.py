@@ -32,19 +32,8 @@ from phoenix_slt.config import (
     TEST_CSV,
 )
 
-# Keypoint augmentation hyperparameters (kept conservative to avoid semantic drift)
-AUG_ROT_MAX_DEG = 7.5
-AUG_TEMP_CROP_MIN_RATIO = 0.7
-AUG_FRAME_DROP_PROB = 0.05
-AUG_JOINT_DROP_PROB = 0.05
-AUG_MIN_FRAMES = 8
+# Keypoint augmentation hyperparameters (mild, similar to old notebook)
 AUG_NOISE_STD = 0.002
-AUG_TEMP_MASK_PROB = 0.4
-AUG_TEMP_MASK_MAX_RATIO = 0.2  # up to 20% of sequence masked
-AUG_HAND_JITTER_STD = 0.003
-
-# Keypoint normalization
-KPTS_EPS = 1e-6
 
 
 def load_tokenizer() -> MBartTokenizer:
@@ -78,14 +67,6 @@ def augment_kpts_tensor(kpts: torch.Tensor) -> torch.Tensor:
     T, D = kpts.shape
     kpts = kpts.view(T, NUM_JOINTS, NUM_COORDS)
 
-    # Random temporal crop to vary start/end while keeping enough frames
-    if T > AUG_MIN_FRAMES and random.random() < 0.5:
-        max_T = min(T, MAX_FRAMES)
-        crop_len = random.randint(int(max_T * AUG_TEMP_CROP_MIN_RATIO), max_T)
-        start = random.randint(0, max(0, T - crop_len))
-        kpts = kpts[start : start + crop_len]
-        T = kpts.shape[0]
-
     if random.random() < 0.5 and T > 4:
         rate = random.uniform(0.8, 1.2)
         new_T = max(int(T * rate), 1)
@@ -94,30 +75,6 @@ def augment_kpts_tensor(kpts: torch.Tensor) -> torch.Tensor:
         kpts = x.squeeze(0).permute(1, 0).view(new_T, NUM_JOINTS, NUM_COORDS)
         T = new_T
 
-    # Frame dropout keeps temporal structure while adding robustness
-    if T > AUG_MIN_FRAMES and random.random() < 0.5:
-        keep_mask = torch.rand(T) > AUG_FRAME_DROP_PROB
-        if keep_mask.sum() < AUG_MIN_FRAMES:
-            keep_mask[:AUG_MIN_FRAMES] = True  # guarantee minimum length
-        kpts = kpts[keep_mask]
-        T = kpts.shape[0]
-
-    # Temporal masking: zero-out a contiguous span to simulate occlusion/dropouts
-    if T > AUG_MIN_FRAMES and random.random() < AUG_TEMP_MASK_PROB:
-        span = max(1, int(T * random.uniform(0.05, AUG_TEMP_MASK_MAX_RATIO)))
-        start = random.randint(0, max(0, T - span))
-        kpts[start : start + span] = 0.0
-
-    # Small in-plane rotation
-    if random.random() < 0.5:
-        theta = torch.empty(1).uniform_(
-            -AUG_ROT_MAX_DEG, AUG_ROT_MAX_DEG
-        ) * (np.pi / 180.0)
-        cos_t, sin_t = torch.cos(theta), torch.sin(theta)
-        x, y = kpts[..., 0].clone(), kpts[..., 1].clone()
-        kpts[..., 0] = cos_t * x - sin_t * y
-        kpts[..., 1] = sin_t * x + cos_t * y
-
     if random.random() < 0.5:
         scale = 1.0 + 0.05 * torch.randn(1).clamp(-0.1, 0.1)
         tx = 0.02 * torch.randn(1)
@@ -125,19 +82,8 @@ def augment_kpts_tensor(kpts: torch.Tensor) -> torch.Tensor:
         kpts[..., 0] = kpts[..., 0] * scale + tx
         kpts[..., 1] = kpts[..., 1] * scale + ty
 
-    # Drop a subset of joints to force robustness to missing detections
     if random.random() < 0.5:
-        joint_mask = torch.rand(NUM_JOINTS) > AUG_JOINT_DROP_PROB
-        if not joint_mask.any():
-            joint_mask[torch.randint(0, NUM_JOINTS, (1,))] = True
-        kpts = kpts * joint_mask.view(1, NUM_JOINTS, 1)
-
-    # Hand-focused jitter (assumes hand joints exist; applies to all joints for robustness)
-    if random.random() < 0.5:
-        kpts = kpts + AUG_HAND_JITTER_STD * torch.randn_like(kpts)
-
-    if random.random() < 0.5:
-        kpts = kpts + AUG_NOISE_STD * torch.randn_like(kpts)
+        kpts = kpts + 0.002 * torch.randn_like(kpts)
 
     return kpts.view(-1, D)
 
@@ -164,14 +110,6 @@ class PhoenixDataset(Dataset):
 
         kpts_np = np.load(kpts_path).astype(np.float32)
         kpts_np[..., 0] *= -1.0
-
-        # Per-video normalization: center and scale by std to reduce subject variance
-        kpts_center = kpts_np.mean(axis=1, keepdims=True)  # (T,1,3)
-        kpts_np = kpts_np - kpts_center
-        kpts_std = np.std(kpts_np, axis=(1, 2), keepdims=True)  # (T,1,1)
-        kpts_std = np.clip(kpts_std, KPTS_EPS, None)
-        kpts_np = kpts_np / kpts_std
-
         T = kpts_np.shape[0]
         kpts_np = kpts_np.reshape(T, -1)
         kpts = torch.from_numpy(kpts_np)
@@ -181,14 +119,6 @@ class PhoenixDataset(Dataset):
 
         if self.is_train:
             kpts = augment_kpts_tensor(kpts)
-
-        # Velocity features: frame-wise delta, pad first frame with zeros
-        T = kpts.shape[0]
-        kpts_view = kpts.view(T, NUM_JOINTS, NUM_COORDS)
-        vel = torch.zeros_like(kpts_view)
-        if T > 1:
-            vel[1:] = kpts_view[1:] - kpts_view[:-1]
-        kpts = torch.cat([kpts_view, vel], dim=-1).view(T, -1)
 
         return {
             "name": name,

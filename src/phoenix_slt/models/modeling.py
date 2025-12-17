@@ -286,19 +286,9 @@ class VLP_PretrainingModel(nn.Module):
         for param in self.text_encoder.parameters():
             param.requires_grad = False
 
-        hidden = 512
-        self.vis_head = nn.Sequential(
-            nn.Linear(D_MODEL, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, 256),
-        )
-        self.text_head = nn.Sequential(
-            nn.Linear(MBART_DIM, hidden),
-            nn.GELU(),
-            nn.Linear(hidden, 256),
-        )
-        # Initialize temperature a bit sharper than CLIP default to speed contrastive convergence
-        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1.0 / 0.05)))
+        self.vis_head = nn.Linear(D_MODEL, 256)
+        self.text_head = nn.Linear(MBART_DIM, 256)
+        self.logit_scale = nn.Parameter(torch.log(torch.tensor(1.0 / 0.07)))
 
     def encode_visual(self, batch) -> torch.Tensor:
         vis_feat, _ = self.visual_encoder(batch["kpts"], batch["kpts_mask"], batch["siglip"])

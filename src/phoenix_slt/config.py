@@ -23,8 +23,7 @@ TEST_CSV = META_DIR / "PHOENIX-2014-T.test.corpus.csv"
 # Data dimensions
 NUM_JOINTS = 75
 NUM_COORDS = 3
-# Use position + velocity features for keypoints
-KPTS_FEAT_DIM = NUM_JOINTS * NUM_COORDS * 2
+KPTS_FEAT_DIM = NUM_JOINTS * NUM_COORDS
 SIGLIP_DIM = 768
 SIGLIP_LEN = 180
 MAX_TOKENS = 64
@@ -40,11 +39,11 @@ MBART_DIM = 1024
 
 # Modality switches
 USE_KPTS = True
-USE_SIGLIP = True  # ENABLED: Using both modalities for better performance
+USE_SIGLIP = False  # ENABLED: Using both modalities for better performance
 assert USE_KPTS or USE_SIGLIP, "At least one modality must be True."
 
 # Batch sizes per phase (tuned for 2x A100 40GB; adjust as needed)
-BATCH_SIZE_PHASE1 = 1500
+BATCH_SIZE_PHASE1 = 400
 BATCH_SIZE_PHASE2 = 50
 
 # Phase 1 (VLP) settings
@@ -61,7 +60,7 @@ DECODER_LR = 5e-6
 SLT_WEIGHT_DECAY = 0.05
 SLT_EPOCHS = 30
 LABEL_SMOOTHING = 0.1
-ACCUMULATE_STEPS = 6  # Larger effective batch for stronger contrastive signal
+ACCUMULATE_STEPS = 2  # Conservative for stability
 WARMUP_EPOCHS = 5
 PATIENCE = 8
 BEST_SLT_CKPT = CHECKPOINTS_DIR / "best_slt_model.pt"
