@@ -22,6 +22,9 @@ from phoenix_slt.config import (
     VLP_LR,
     ACCUMULATE_STEPS,
 )
+import torch
+import numpy as np
+import random
 
 def run_sweep():
     """Run a single training job with W&B sweep parameters."""
@@ -41,6 +44,15 @@ def run_sweep():
         cfg.VLP_LR = lr
         cfg.DROPOUT = dropout
         cfg.ACCUMULATE_STEPS = accumulate
+
+        # Fix seeds for reproducibility across runs
+        seed = config.get("seed", 42)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
         
         print(f"Running with batch={batch_size}, lr={lr}, dropout={dropout}, accum={accumulate}")
         
