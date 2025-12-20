@@ -30,40 +30,48 @@ MAX_TOKENS = 64
 MAX_FRAMES = 180
 
 # Model hyperparameters
-ENC_LAYERS = 4
-N_HEADS = 4
+ENC_LAYERS = 5  # Moderate increase from 4 (6 was too large)
+N_HEADS = 8     # Increased from 4 for better attention
 FF_EXPANSION = 4
-DROPOUT = 0.2  # Reduced from 0.4 to improve representation learning
-D_MODEL = 384
+DROPOUT = 0.3  # Increased from 0.2 to prevent overfitting
+D_MODEL = 448   # Moderate increase from 384 (512 was too large)
 MBART_DIM = 1024
 
 # Modality switches
 USE_KPTS = True
-USE_SIGLIP = False  # ENABLED: Using both modalities for better performance
+USE_SIGLIP = False  # Tested, no significant gain for this dataset
 assert USE_KPTS or USE_SIGLIP, "At least one modality must be True."
 
-# Batch sizes per phase (tuned for 2x A100 40GB; adjust as needed)
-BATCH_SIZE_PHASE1 = 400
-BATCH_SIZE_PHASE2 = 50
+# Batch sizes per phase (adjusted for larger model on 2x A100 40GB)
+BATCH_SIZE_PHASE1 = 200  # Reduced from 250 due to larger model
+BATCH_SIZE_PHASE2 = 15   # Can handle more without SigLIP
 
 # Phase 1 (VLP) settings
-VLP_EPOCHS = 500
-VLP_LR = 1e-4
-VLP_PATIENCE = 15
+VLP_EPOCHS = 100
+VLP_LR = 2e-4
+VLP_PATIENCE = 50
 VLP_CHECKPOINT_PATH = CHECKPOINTS_DIR / "vlp_best_encoder.pt"
 VLP_FULL_CHECKPOINT_PATH = CHECKPOINTS_DIR / "vlp_best_full.pt"
 ENCODER_CKPT = VLP_CHECKPOINT_PATH
 
 # Phase 2 settings
-ENCODER_LR = 1e-4
-DECODER_LR = 5e-6
-SLT_WEIGHT_DECAY = 0.05
-SLT_EPOCHS = 30
-LABEL_SMOOTHING = 0.1
+ENCODER_LR = 1e-4      # Restored conservative rate
+DECODER_LR = 5e-6      # Restored conservative rate
+SLT_WEIGHT_DECAY = 0.05  # Restored proper regularization
+SLT_EPOCHS = 500
+LABEL_SMOOTHING = 0.1    # Restored original value
 ACCUMULATE_STEPS = 2  # Conservative for stability
-WARMUP_EPOCHS = 5
-PATIENCE = 8
+WARMUP_EPOCHS = 10    # Increased from 5 for unfrozen encoder
+PATIENCE = 300
 BEST_SLT_CKPT = CHECKPOINTS_DIR / "best_slt_model.pt"
+
+# Advanced training techniques
+USE_CTC_LOSS = False      # DISABLED: Causing mode collapse, needs debugging
+CTC_WEIGHT = 0.3          # Weight for CTC loss (0.3 * CTC + 0.7 * CE)
+USE_CURRICULUM = False    # DISABLED: Not helpful without CTC
+CURRICULUM_EPOCHS = 20    # Number of epochs to ramp up difficulty
+USE_BACK_TRANSLATION = False  # Augment with back-translated data (requires prep)
+ENSEMBLE_CHECKPOINTS = []     # List of checkpoint paths for ensemble decoding
 
 # EMA for VLP encoder
 EMA_DECAY = 0.999

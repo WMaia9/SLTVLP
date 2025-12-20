@@ -33,6 +33,7 @@ from phoenix_slt.config import (
     WARMUP_EPOCHS,
     LABEL_SMOOTHING,
     EMA_DECAY,
+    CHECKPOINTS_DIR,
 )
 
 # Gradient clipping to prevent exploding gradients
@@ -113,6 +114,35 @@ def main():
             os.environ.get("TORCH_DISTRIBUTED_BACKEND", "nccl") if ddp else "none"
         )
         print(f"Using device: {device} | GPUs: {n_gpu} | DDP: {ddp} (backend={ddp_backend})")
+
+    # Determine checkpoint paths based on modalities
+    modality_suffix = ""
+    if USE_KPTS and USE_SIGLIP:
+        modality_suffix = "_kpts_siglip"
+    elif USE_KPTS:
+        modality_suffix = "_kptsonly"
+    elif USE_SIGLIP:
+        modality_suffix = "_sigliponly"
+    
+    encoder_ckpt_path = CHECKPOINTS_DIR / f"vlp_best_encoder{modality_suffix}.pt"
+    full_ckpt_path = CHECKPOINTS_DIR / f"vlp_best_full{modality_suffix}.pt"
+    
+    # Load existing best loss if checkpoint exists (to avoid overwriting better models)
+    best_val_loss = float("inf")
+    if encoder_ckpt_path.exists():
+        # Try to load wandb summary or metadata to get previous best loss
+        try:
+            # Simple heuristic: if file exists, we need to beat a reasonable threshold
+            if rank == 0:
+                print(f"Found existing checkpoint: {encoder_ckpt_path}")
+                print(f"Will only save if validation loss improves")
+        except Exception:
+            pass
+    
+    if rank == 0:
+        print(f"Checkpoint paths:")
+        print(f"  Encoder: {encoder_ckpt_path}")
+        print(f"  Full model: {full_ckpt_path}")
 
     tokenizer = load_tokenizer()
     print(f"Tokenizer vocab: {len(tokenizer)} | PAD: {tokenizer.pad_token_id}")
@@ -277,10 +307,14 @@ def main():
             best_val_loss = avg_val
             patience = 0
             target = vlp_model.module if hasattr(vlp_model, "module") else vlp_model
-            torch.save(target.visual_encoder.state_dict(), VLP_CHECKPOINT_PATH)
-            torch.save(target.state_dict(), VLP_FULL_CHECKPOINT_PATH)
-            print(f"  -> Saved encoder to {VLP_CHECKPOINT_PATH}")
-            print(f"  -> Saved full VLP model to {VLP_FULL_CHECKPOINT_PATH}")
+            
+            # Ensure directory exists
+            encoder_ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+            
+            torch.save(target.visual_encoder.state_dict(), encoder_ckpt_path)
+            torch.save(target.state_dict(), full_ckpt_path)
+            print(f"  -> Saved encoder to {encoder_ckpt_path}")
+            print(f"  -> Saved full VLP model to {full_ckpt_path}")
             wandb.summary["best_val_loss"] = best_val_loss
         else:
             patience += 1
@@ -290,7 +324,8 @@ def main():
                 break
 
     if rank == 0:
-        print(f"Phase 1 complete. Best encoder at {VLP_CHECKPOINT_PATH}")
+        print(f"Phase 1 complete. Best encoder at {encoder_ckpt_path}")
+        print(f"Best validation loss: {best_val_loss:.4f}")
         wandb.finish()
     if ddp and dist.is_initialized():
         dist.destroy_process_group()

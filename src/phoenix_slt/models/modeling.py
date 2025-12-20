@@ -258,7 +258,8 @@ class SqueezeformerFusionEncoder(nn.Module):
         siglip: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         x_k = self.kpts_proj(kpts) if USE_KPTS else torch.zeros_like(self.kpts_proj(kpts))
-        x_v = self.vlm_proj(siglip) if USE_SIGLIP else torch.zeros_like(self.vlm_proj(siglip))
+        # When SigLIP is disabled, use a zero tensor that matches the keypoint sequence length
+        x_v = self.vlm_proj(siglip) if USE_SIGLIP else torch.zeros_like(x_k)
         if USE_SIGLIP:
             x_v = self.temporal_vlm(x_v)
             x_v = x_v.transpose(1, 2)
@@ -322,30 +323,42 @@ class VLP_PretrainingModel(nn.Module):
 
 
 class SignTranslationModel(nn.Module):
-    """End-to-end SLT model: fusion encoder + adapter + mBART decoder."""
-    def __init__(self, encoder, text_model: str = "facebook/mbart-large-cc25"):
+    """End-to-end SLT model: fusion encoder + adapter + mBART decoder + optional CTC."""
+    def __init__(self, encoder, text_model: str = "facebook/mbart-large-cc25", vocab_size: int = 250027):
         super().__init__()
         self.encoder = encoder
         self.adapter = nn.Linear(D_MODEL, MBART_DIM)
         self.mbart = MBartForConditionalGeneration.from_pretrained(text_model)
+        
+        # CTC head for auxiliary alignment loss
+        self.ctc_head = nn.Linear(D_MODEL, vocab_size)
+        self.use_ctc = False  # Set externally based on config
 
         self.mbart.model.shared.requires_grad_(False)
         self.mbart.model.encoder.embed_positions.requires_grad_(False)
         self.mbart.model.decoder.embed_positions.requires_grad_(False)
+        
+        # Keep mBART encoder frozen - unfreezing caused catastrophic forgetting
         self.mbart.model.encoder.requires_grad_(False)
 
         for param in self.mbart.model.decoder.parameters():
             param.requires_grad = True
 
-    def forward(self, batch) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, batch, return_ctc: bool = False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         enc_out, enc_mask = self.encoder(batch["kpts"], batch["kpts_mask"], batch["siglip"])
+        
+        # CTC logits before adapter (operates on encoder output directly)
+        ctc_logits = None
+        if self.use_ctc and return_ctc:
+            ctc_logits = self.ctc_head(enc_out)  # (B, T, vocab)
+        
         enc_out = self.adapter(enc_out)
         outputs = self.mbart(
             inputs_embeds=enc_out,
             attention_mask=batch["kpts_mask"],
             labels=batch["labels"],
         )
-        return outputs.loss, outputs.logits
+        return outputs.loss, outputs.logits, ctc_logits
 
     def generate(
         self, batch, tokenizer, max_new_tokens: int = 60
